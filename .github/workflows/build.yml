@@ -1,0 +1,183 @@
+name: build
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  get-version:
+    runs-on: ubuntu-latest
+    outputs:
+      src_version: ${{ steps.retrieve-src-version.outputs.release }}
+      current_version: ${{ steps.retrieve-current-version.outputs.release }}
+    steps:
+      - id: retrieve-src-version
+        uses: pozetroninc/github-action-get-latest-release@master
+        with:
+          owner: microsoft
+          repo: playwright
+          excludes: prerelease, draft
+
+      - id: retrieve-current-version
+        uses: pozetroninc/github-action-get-latest-release@master
+        with:
+          owner: ecmchow
+          repo: playwright-pnpm
+          excludes: prerelease, draft
+
+  build-images:
+    name: Build Linux Images
+    runs-on: ubuntu-latest
+    needs: get-version
+    if: needs.get-version.outputs.src_version != needs.get-version.outputs.current_version
+    strategy:
+      max-parallel: 2
+      matrix:
+        arch: [amd64, arm64]
+        os: [focal, jammy]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          version: v0.9.1
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: Dockerfile
+          build-args: |
+            VERSION=${{needs.get-version.outputs.src_version}}
+            OS=${{ matrix.os }}
+            ARCH=${{ matrix.arch }}
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-${{ matrix.os }}-${{ matrix.arch }}
+
+  publish-manfiest:
+    name: Publish Manifest
+    runs-on: ubuntu-latest
+    needs:
+      - get-version
+      - build-images
+    if: needs.get-version.outputs.src_version != needs.get-version.outputs.current_version
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker Manifest (latest)
+        run: |
+          docker manifest create ecmchow/playwright-pnpm:latest \
+            --amend ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-amd64 \
+            --amend ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-arm64
+    
+      - name: Docker Annotate (latest)
+        run: |
+          docker manifest annotate --os linux --arch amd64 \
+            ecmchow/playwright-pnpm:latest ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-amd64
+         
+          docker manifest annotate --os linux --arch arm64 \
+            ecmchow/playwright-pnpm:latest ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-arm64
+    
+      - name: Docker Push (latest)
+        run: |
+          docker manifest push ecmchow/playwright-pnpm:latest
+
+      - name: Docker Manifest (latest-jammy)
+        run: |
+          docker manifest create ecmchow/playwright-pnpm:latest-jammy \
+            --amend ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-amd64 \
+            --amend ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-arm64
+    
+      - name: Docker Annotate (latest-jammy)
+        run: |
+          docker manifest annotate --os linux --arch amd64 \
+            ecmchow/playwright-pnpm:latest-jammy ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-amd64
+         
+          docker manifest annotate --os linux --arch arm64 \
+            ecmchow/playwright-pnpm:latest-jammy ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-arm64
+    
+      - name: Docker Push (latest-jammy)
+        run: |
+          docker manifest push ecmchow/playwright-pnpm:latest-jammy
+      
+      - name: Docker Manifest (latest-focal)
+        run: |
+          docker manifest create ecmchow/playwright-pnpm:latest-focal \
+            --amend ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal-amd64 \
+            --amend ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal-arm64
+    
+      - name: Docker Annotate (latest-focal)
+        run: |
+          docker manifest annotate --os linux --arch amd64 \
+            ecmchow/playwright-pnpm:latest-focal ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal-amd64
+         
+          docker manifest annotate --os linux --arch arm64 \
+            ecmchow/playwright-pnpm:latest-focal ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal-arm64
+    
+      - name: Docker Push (latest-focal)
+        run: |
+          docker manifest push ecmchow/playwright-pnpm:latest-focal
+
+      - name: Docker Manifest (jammy)
+        run: |
+          docker manifest create ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy \
+            --amend ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-amd64 \
+            --amend ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-arm64
+    
+      - name: Docker Annotate (jammy)
+        run: |
+          docker manifest annotate --os linux --arch amd64 \
+            ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-amd64
+         
+          docker manifest annotate --os linux --arch arm64 \
+            ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy-arm64
+    
+      - name: Docker Push (jammy)
+        run: |
+          docker manifest push ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-jammy
+      
+      - name: Docker Manifest (focal)
+        run: |
+          docker manifest create ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal \
+            --amend ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal-amd64 \
+            --amend ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal-arm64
+    
+      - name: Docker Annotate (focal)
+        run: |
+          docker manifest annotate --os linux --arch amd64 \
+            ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal-amd64
+         
+          docker manifest annotate --os linux --arch arm64 \
+            ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal-arm64
+    
+      - name: Docker Push (focal)
+        run: |
+          docker manifest push ecmchow/playwright-pnpm:${{needs.get-version.outputs.src_version}}-focal
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{needs.get-version.outputs.src_version}}
